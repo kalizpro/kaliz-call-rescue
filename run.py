@@ -19,6 +19,8 @@ BAUD = int(os.getenv("BAUD", "115200"))
 MAX_RINGS = int(os.getenv("MAX_RINGS", "3"))
 LOG_FILE = os.getenv("LOG_FILE", "calls_log.csv")
 AUDIO_FILE = os.getenv("AUDIO_FILE", "voices/busy_lines.wav")
+COUNTRY_CODE = os.getenv("COUNTRY_CODE", "598")
+TRUNK_PREFIX = os.getenv("TRUNK_PREFIX", "0")
 
 # -----------------------------
 # Funciones
@@ -41,6 +43,26 @@ def call_rescue_web_hook(number: str, local_number: str, event: str):
         print(f"Webhook {event}: {payload} -> {response.status_code}")
     except Exception as e:
         print(f"❌ Error enviando webhook: {e}")
+
+def normalize_phone_number(raw_number: str) -> str:
+    """Normaliza a E.164 usando COUNTRY_CODE y TRUNK_PREFIX.
+    - Si ya viene con '+', se respeta.
+    - Se remueve el prefijo troncal si corresponde.
+    - Se antepone +COUNTRY_CODE cuando falta.
+    """
+    if not raw_number:
+        return raw_number
+    value = re.sub(r"[^0-9+]", "", raw_number.strip())
+    if value.startswith("+"):
+        return value
+    # Quitar prefijo troncal (ej. '0')
+    if TRUNK_PREFIX and value.startswith(TRUNK_PREFIX):
+        value = value[len(TRUNK_PREFIX):]
+    # Agregar código de país si falta
+    if COUNTRY_CODE and not value.startswith(COUNTRY_CODE):
+        return f"+{COUNTRY_CODE}{value}"
+    # Si ya empieza con el código de país pero sin '+', agrégalo
+    return f"+{value}"
 
 def play_audio(ser: serial.Serial, audio_file: str):
     """Contesta la llamada y reproduce un archivo RAW en la línea telefónica"""
@@ -162,6 +184,7 @@ try:
         # Detecta número entrante (NMBR)
         if line.startswith("NMBR"):
             incoming_number = line.split("=")[-1].strip()
+            incoming_number = normalize_phone_number(incoming_number)
             call_active = True
             ring_count = 0
             print(f"📲 Número entrante detectado: {incoming_number}")
