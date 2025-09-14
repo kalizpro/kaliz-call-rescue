@@ -133,6 +133,47 @@ def play_audio(ser: serial.Serial, audio_file: str):
     except Exception as e:
         print(f"❌ Error al reproducir audio: {e}")
         
+def answer_and_hangup(ser: serial.Serial):
+    """Contesta la llamada entrante y cuelga inmediatamente."""
+    try:
+        print("🎙️ Preparando para contestar y colgar...")
+        # Cambiar a modo data asegura comandos de telefonía clásicos
+        ser.write(b'AT+FCLASS=0\r\n')
+        time.sleep(0.5)
+        ser.readline()
+
+        # Intentar contestar
+        print("📞 Contestando con ATA (hangup inmediato luego)...")
+        ser.write(b'ATA\r\n')
+        response = ""
+        timeout = time.time() + 5
+        while "CONNECT" not in response and time.time() < timeout:
+            line = ser.readline().decode(errors="ignore").strip()
+            if line:
+                response = line
+                print(f"DEBUG(ATA): {line}")
+
+        # Fallback: intentar VLS
+        if "CONNECT" not in response:
+            print("⚠️ ATA no conectó, intentando AT+VLS=1 para tomar la línea...")
+            ser.write(b'AT+VLS=1\r\n')
+            time.sleep(1)
+            response = ""
+            timeout = time.time() + 5
+            while "CONNECT" not in response and time.time() < timeout:
+                line = ser.readline().decode(errors="ignore").strip()
+                if line:
+                    response = line
+                    print(f"DEBUG(VLS): {line}")
+
+        # Colgar en cualquier caso
+        print("📞 Colgando...")
+        ser.write(b'ATH\r\n')
+        time.sleep(0.3)
+        print("✅ Llamada colgada.")
+    except Exception as e:
+        print(f"❌ Error en answer_and_hangup: {e}")
+
 # -----------------------------
 # Inicialización del módem
 # -----------------------------
@@ -195,16 +236,12 @@ try:
                 ring_count += 1
                 print(f"📞 Ring {ring_count} de {incoming_number}")
                 if ring_count >= MAX_RINGS:
-                    print("📢 Contestando y reproduciendo audio...")
+                    print("📢 Alcanzado MAX_RINGS. Enviando webhook y colgando...")
                     log_call(incoming_number, LOCAL_NUMBER, "answered_with_audio")
                     call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "answered_with_audio")
-                    # Colgar inmediatamente después del webhook si no se reproduce audio
-                    try:
-                        ser.write(b'ATH\r\n')
-                        time.sleep(0.2)
-                        print("📞 Llamada colgada tras webhook.")
-                    except Exception as e:
-                        print(f"❌ Error al colgar: {e}")
+                    # Para colgar realmente, primero se debe tomar línea (ATA) y colgar (ATH)
+                    answer_and_hangup(ser)
+                    # Si quieres reproducir audio en lugar de colgar inmediato, usa:
                     # play_audio(ser, AUDIO_FILE)
                     incoming_number = None
                     call_active = False
