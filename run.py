@@ -37,7 +37,7 @@ def call_rescue_web_hook(number: str, local_number: str, event: str):
     """Enviar webhook"""
     if not WEBHOOK_URL:
         return
-    payload = {"From": number, "To": local_number, "Event": event}
+    payload = {"From": number, "To": local_number, "CallSid": event}
     try:
         response = requests.post(WEBHOOK_URL, json=payload, timeout=5)
         print(f"Webhook {event}: {payload} -> {response.status_code}")
