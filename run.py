@@ -22,6 +22,7 @@ AUDIO_FILE = os.getenv("AUDIO_FILE", "voices/busy_lines.wav")
 COUNTRY_CODE = os.getenv("COUNTRY_CODE", "598")
 TRUNK_PREFIX = os.getenv("TRUNK_PREFIX", "0")
 HANGUP_DELAY_MS = int(os.getenv("HANGUP_DELAY_MS", "1200"))
+PLAY_AUDIO = os.getenv("PLAY_AUDIO", "1") in ("1", "true", "TRUE", "yes", "YES")
 
 # -----------------------------
 # Funciones
@@ -66,7 +67,12 @@ def normalize_phone_number(raw_number: str) -> str:
     return f"+{value}"
 
 def play_audio(ser: serial.Serial, audio_file: str):
-    """Contesta la llamada y reproduce un archivo RAW en la línea telefónica"""
+    """Contesta la llamada y reproduce un archivo de audio en la línea telefónica.
+
+    - Si la extensión es .wav, lee frames con el módulo wave y envía PCM.
+    - Caso contrario, envía el archivo como RAW (u-Law/PCM según VSM).
+    Requiere que el módem soporte AT+VTX.
+    """
     try:
         # Cambiar a modo data para contestar
         print("🎙️ Modo data (FCLASS=0) para contestar...")
@@ -102,10 +108,11 @@ def play_audio(ser: serial.Serial, audio_file: str):
                 ser.write(b'ATH\r\n')
                 return
 
-        # Cambiar a modo voz
+        # Cambiar a modo voz y formato
         print("🎙️ Cambiando a modo voz para reproducir audio...")
         ser.write(b'AT+FCLASS=8\r\n')
         time.sleep(0.5)
+        # 128 = 8-bit PCM unsigned, 8000 Hz típico
         ser.write(b'AT+VSM=128,8000\r\n')
         time.sleep(0.5)
 
@@ -114,12 +121,40 @@ def play_audio(ser: serial.Serial, audio_file: str):
         ser.write(b'AT+VTX\r\n')
         time.sleep(1)
 
-        # Reproducir audio RAW
+        # Reproducir audio
         print("▶️ Reproduciendo audio...")
-        with open(audio_file, "rb") as f:
-            while chunk := f.read(1024):
-                ser.write(chunk)
-                time.sleep(0.05)
+        if audio_file.lower().endswith('.wav'):
+            try:
+                w = wave.open(audio_file, 'rb')
+                # Validar mono y 8k si es posible
+                channels = getattr(w, 'getnchannels', lambda:1)()
+                framerate = getattr(w, 'getframerate', lambda:8000)()
+                if channels != 1 or framerate != 8000:
+                    print(f"⚠️ WAV no es mono/8kHz (canales={channels}, hz={framerate}). Puede sonar mal.")
+                while True:
+                    frames = w.readframes(1024)
+                    if not frames:
+                        break
+                    ser.write(frames)
+                    time.sleep(0.02)
+                w.close()
+            except Exception as e:
+                print(f"❌ Error leyendo WAV: {e}. Intentando como RAW...")
+                with open(audio_file, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024)
+                        if not chunk:
+                            break
+                        ser.write(chunk)
+                        time.sleep(0.02)
+        else:
+            with open(audio_file, 'rb') as f:
+                while True:
+                    chunk = f.read(1024)
+                    if not chunk:
+                        break
+                    ser.write(chunk)
+                    time.sleep(0.02)
 
         # Terminar transmisión
         ser.write(b'\x10')  # DLE
@@ -228,13 +263,16 @@ try:
                 ring_count += 1
                 print(f"📞 Ring {ring_count} de {incoming_number}")
                 if ring_count >= MAX_RINGS:
-                    print("📢 Alcanzado MAX_RINGS. Enviando webhook y colgando...")
-                    log_call(incoming_number, LOCAL_NUMBER, "answered_with_audio")
-                    call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "answered_with_audio")
-                    # Para colgar realmente, primero se debe tomar línea (ATA) y colgar (ATH)
-                    answer_and_hangup(ser)
-                    # Si quieres reproducir audio en lugar de colgar inmediato, usa:
-                    # play_audio(ser, AUDIO_FILE)
+                    if PLAY_AUDIO:
+                        print("📢 Alcanzado MAX_RINGS. Enviando webhook y reproduciendo audio...")
+                        log_call(incoming_number, LOCAL_NUMBER, "answered_with_audio")
+                        call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "answered_with_audio")
+                        play_audio(ser, AUDIO_FILE)
+                    else:
+                        print("📢 Alcanzado MAX_RINGS. Enviando webhook y colgando...")
+                        log_call(incoming_number, LOCAL_NUMBER, "hangup_after_webhook")
+                        call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "hangup_after_webhook")
+                        answer_and_hangup(ser)
                     incoming_number = None
                     call_active = False
                     ring_count = 0
