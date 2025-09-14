@@ -21,6 +21,7 @@ LOG_FILE = os.getenv("LOG_FILE", "calls_log.csv")
 AUDIO_FILE = os.getenv("AUDIO_FILE", "voices/busy_lines.wav")
 COUNTRY_CODE = os.getenv("COUNTRY_CODE", "598")
 TRUNK_PREFIX = os.getenv("TRUNK_PREFIX", "0")
+HANGUP_DELAY_MS = int(os.getenv("HANGUP_DELAY_MS", "1200"))
 
 # -----------------------------
 # Funciones
@@ -134,39 +135,30 @@ def play_audio(ser: serial.Serial, audio_file: str):
         print(f"❌ Error al reproducir audio: {e}")
         
 def answer_and_hangup(ser: serial.Serial):
-    """Contesta la llamada entrante y cuelga inmediatamente."""
+    """Toma la línea en modo voz de forma silenciosa y cuelga con un pequeño delay.
+
+    Estrategia para evitar 'beep' audible:
+    - Silenciar parlante del módem (ATM0) para evitar tonos locales.
+    - Usar clase de voz (FCLASS=8) y tomar la línea (VLS=1).
+    - Esperar unos milisegundos para estabilizar y luego colgar (ATH).
+    """
     try:
-        print("🎙️ Preparando para contestar y colgar...")
-        # Cambiar a modo data asegura comandos de telefonía clásicos
-        ser.write(b'AT+FCLASS=0\r\n')
-        time.sleep(0.5)
+        print("🎙️ Preparando para contestar y colgar (silencioso)...")
+        # Silenciar el speaker del módem (local)
+        ser.write(b'ATM0\r\n')
+        time.sleep(0.2)
         ser.readline()
 
-        # Intentar contestar
-        print("📞 Contestando con ATA (hangup inmediato luego)...")
-        ser.write(b'ATA\r\n')
-        response = ""
-        timeout = time.time() + 5
-        while "CONNECT" not in response and time.time() < timeout:
-            line = ser.readline().decode(errors="ignore").strip()
-            if line:
-                response = line
-                print(f"DEBUG(ATA): {line}")
+        # Modo voz y tomar línea
+        ser.write(b'AT+FCLASS=8\r\n')
+        time.sleep(0.3)
+        ser.write(b'AT+VLS=1\r\n')
+        time.sleep(0.5)
 
-        # Fallback: intentar VLS
-        if "CONNECT" not in response:
-            print("⚠️ ATA no conectó, intentando AT+VLS=1 para tomar la línea...")
-            ser.write(b'AT+VLS=1\r\n')
-            time.sleep(1)
-            response = ""
-            timeout = time.time() + 5
-            while "CONNECT" not in response and time.time() < timeout:
-                line = ser.readline().decode(errors="ignore").strip()
-                if line:
-                    response = line
-                    print(f"DEBUG(VLS): {line}")
+        # Pequeño delay configurable antes de colgar
+        time.sleep(max(HANGUP_DELAY_MS, 0) / 1000.0)
 
-        # Colgar en cualquier caso
+        # Colgar
         print("📞 Colgando...")
         ser.write(b'ATH\r\n')
         time.sleep(0.3)
