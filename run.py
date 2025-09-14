@@ -23,6 +23,8 @@ COUNTRY_CODE = os.getenv("COUNTRY_CODE", "598")
 TRUNK_PREFIX = os.getenv("TRUNK_PREFIX", "0")
 HANGUP_DELAY_MS = int(os.getenv("HANGUP_DELAY_MS", "1200"))
 PLAY_AUDIO = os.getenv("PLAY_AUDIO", "1") in ("1", "true", "TRUE", "yes", "YES")
+VSM_CODEC = int(os.getenv("VSM_CODEC", "130"))  # 130: μ-law, 129: A-law, 128: 8-bit PCM
+SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "8000"))
 
 # -----------------------------
 # Funciones
@@ -74,52 +76,61 @@ def play_audio(ser: serial.Serial, audio_file: str):
     Requiere que el módem soporte AT+VTX.
     """
     try:
-        # Cambiar a modo data para contestar
-        print("🎙️ Modo data (FCLASS=0) para contestar...")
-        ser.write(b'AT+FCLASS=0\r\n')
-        time.sleep(0.5)
-        ser.readline()  # descartar respuesta
+        # Preparar y contestar en modo voz
+        print("🎙️ Preparando modo voz para contestar...")
+        ser.write(b'ATM0\r\n')  # silenciar speaker local
+        time.sleep(0.2)
+        ser.readline()
+        ser.write(b'AT+FCLASS=8\r\n')
+        time.sleep(0.4)
 
-        # Intentar ATA
-        print("📞 Contestando con ATA...")
+        # Intentar ATA en clase 8
+        print("📞 Contestando (ATA) en modo voz...")
         ser.write(b'ATA\r\n')
         response = ""
-        timeout = time.time() + 5
-        while "CONNECT" not in response and time.time() < timeout:
+        timeout = time.time() + 8
+        while ("CONNECT" not in response and "VCON" not in response) and time.time() < timeout:
             line = ser.readline().decode(errors="ignore").strip()
             if line:
                 response = line
                 print(f"DEBUG(ATA): {line}")
 
-        # Si no conecta, intentar AT+VLS=1
-        if "CONNECT" not in response:
+        # Si no conecta, intentar seleccionar línea de voz
+        if ("CONNECT" not in response and "VCON" not in response):
             print("⚠️ ATA no conectó, intentando AT+VLS=1...")
             ser.write(b'AT+VLS=1\r\n')
-            time.sleep(1)
+            time.sleep(0.8)
             response = ""
             timeout = time.time() + 5
-            while "CONNECT" not in response and time.time() < timeout:
+            while ("CONNECT" not in response and "VCON" not in response) and time.time() < timeout:
                 line = ser.readline().decode(errors="ignore").strip()
                 if line:
                     response = line
                     print(f"DEBUG(VLS): {line}")
-            if "CONNECT" not in response:
-                print("❌ No se pudo levantar la llamada. Colgando.")
+            if ("CONNECT" not in response and "VCON" not in response):
+                print("❌ No se pudo levantar la llamada en modo voz. Colgando.")
                 ser.write(b'ATH\r\n')
                 return
 
         # Cambiar a modo voz y formato
         print("🎙️ Cambiando a modo voz para reproducir audio...")
+        # Nos aseguramos de clase 8 y configuramos códec y muestreo
         ser.write(b'AT+FCLASS=8\r\n')
-        time.sleep(0.5)
-        # 128 = 8-bit PCM unsigned, 8000 Hz típico
-        ser.write(b'AT+VSM=128,8000\r\n')
+        time.sleep(0.3)
+        ser.write(f"AT+VSM={VSM_CODEC},{SAMPLE_RATE}\r\n".encode())
         time.sleep(0.5)
 
         # Entrar en transmisión de voz
         print("➡️ Entrando en modo VTX...")
         ser.write(b'AT+VTX\r\n')
-        time.sleep(1)
+        # Algunos módems responden CONNECT o VCON al entrar a VTX
+        start = time.time()
+        while time.time() - start < 2:
+            line = ser.readline().decode(errors="ignore").strip()
+            if line:
+                print(f"DEBUG(VTX): {line}")
+                if ("CONNECT" in line) or ("VCON" in line) or ("OK" in line):
+                    break
 
         # Reproducir audio
         print("▶️ Reproduciendo audio...")
@@ -131,6 +142,8 @@ def play_audio(ser: serial.Serial, audio_file: str):
                 framerate = getattr(w, 'getframerate', lambda:8000)()
                 if channels != 1 or framerate != 8000:
                     print(f"⚠️ WAV no es mono/8kHz (canales={channels}, hz={framerate}). Puede sonar mal.")
+                # Si usamos μ-law, convertimos on-the-fly si el WAV ya está en PCM u8
+                # Nota: para producción, conviene preconvertir con ffmpeg
                 while True:
                     frames = w.readframes(1024)
                     if not frames:
