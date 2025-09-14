@@ -198,6 +198,13 @@ try:
                     print("📢 Contestando y reproduciendo audio...")
                     log_call(incoming_number, LOCAL_NUMBER, "answered_with_audio")
                     call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "answered_with_audio")
+                    # Colgar inmediatamente después del webhook si no se reproduce audio
+                    try:
+                        ser.write(b'ATH\r\n')
+                        time.sleep(0.2)
+                        print("📞 Llamada colgada tras webhook.")
+                    except Exception as e:
+                        print(f"❌ Error al colgar: {e}")
                     # play_audio(ser, AUDIO_FILE)
                     incoming_number = None
                     call_active = False
