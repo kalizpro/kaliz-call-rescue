@@ -41,6 +41,10 @@ USE_HARDWARE_PACING = os.getenv("USE_HARDWARE_PACING", "1") in ("1", "true", "TR
 FADE_IN_MS = int(os.getenv("FADE_IN_MS", "10"))
 AT_DIAGNOSTICS = os.getenv("AT_DIAGNOSTICS", "1") in ("1", "true", "TRUE", "yes", "YES")
 
+# Preferencia regional: si no se definió VSM_CODEC por entorno y el país es Uruguay (598), usar A-law.
+if "VSM_CODEC" not in os.environ and COUNTRY_CODE and COUNTRY_CODE.startswith("598"):
+    VSM_CODEC = 129
+
 # -----------------------------
 # Funciones
 # -----------------------------
