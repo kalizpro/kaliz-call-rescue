@@ -33,6 +33,10 @@ SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "8000"))
 AUTO_VSM = os.getenv("AUTO_VSM", "1") in ("1", "true", "TRUE", "yes", "YES")
 TX_GAIN = os.getenv("TX_GAIN")
 PCM8_SIGNED = os.getenv("PCM8_SIGNED", "0") in ("1", "true", "TRUE", "yes", "YES")
+NORMALIZE_RMS = os.getenv("NORMALIZE_RMS", "1") in ("1", "true", "TRUE", "yes", "YES")
+TARGET_RMS = int(os.getenv("TARGET_RMS", "5000"))  # objetivo RMS en PCM 16-bit
+REMOVE_DC = os.getenv("REMOVE_DC", "1") in ("1", "true", "TRUE", "yes", "YES")
+PRE_SILENCE_MS = int(os.getenv("PRE_SILENCE_MS", "150"))
 
 # -----------------------------
 # Funciones
@@ -92,6 +96,34 @@ def get_silence_byte(codec: int) -> int:
         return 0xD5
     # 8-bit PCM
     return 0x80 if not PCM8_SIGNED else 0x00
+
+def process_pcm16_block(data: bytes) -> bytes:
+    """Post-procesa un bloque PCM 16-bit mono: elimina DC y normaliza RMS si está habilitado.
+    Devuelve bytes PCM16 procesados.
+    """
+    try:
+        if not data:
+            return data
+        processed = data
+        # Eliminar componente DC
+        if REMOVE_DC:
+            avg = audioop.avg(processed, 2)
+            if avg:
+                processed = audioop.bias(processed, 2, -avg)
+        # Normalización RMS simple hacia TARGET_RMS
+        if NORMALIZE_RMS and TARGET_RMS > 0:
+            rms = audioop.rms(processed, 2)
+            if rms > 0:
+                # Limitar factor para evitar clipping duro
+                factor = min(3.0, max(0.3, TARGET_RMS / float(rms)))
+                processed = audioop.mul(processed, 2, factor)
+                # Soft-clip: limitar picos a evitar saturación (aprox)
+                max_amp = 32760
+                # audioop no tiene clip directo; convertimos a 16-bit y recortamos
+                # Pero mantenerlo simple: confiar en factor limitado
+        return processed
+    except Exception:
+        return data
 
 def play_audio(ser: serial.Serial, audio_file: str):
     """Contesta la llamada y reproduce un archivo de audio en la línea telefónica.
@@ -218,7 +250,7 @@ def play_audio(ser: serial.Serial, audio_file: str):
                     break
 
         # Enviar 100 ms de silencio inicial para estabilizar
-        silence_ms = 100
+        silence_ms = max(PRE_SILENCE_MS, 0)
         silence_samples = int(effective_rate * (silence_ms / 1000.0))
         silence_byte = get_silence_byte(effective_codec)
         if silence_samples > 0:
@@ -279,6 +311,9 @@ def play_audio(ser: serial.Serial, audio_file: str):
                     # Resamplear a la tasa efectiva si es necesario
                     if framerate and framerate != effective_rate:
                         data, rate_state = audioop.ratecv(data, 2, 1, framerate, effective_rate, rate_state)
+
+                    # Post-procesado PCM16: DC y RMS
+                    data = process_pcm16_block(data)
 
                     # Convertir al códec elegido
                     if effective_codec == 130:  # μ-law
