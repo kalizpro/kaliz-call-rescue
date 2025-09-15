@@ -76,6 +76,12 @@ def normalize_phone_number(raw_number: str) -> str:
     # Si ya empieza con el código de país pero sin '+', agrégalo
     return f"+{value}"
 
+def escape_dle(payload: bytes) -> bytes:
+    """Duplica los bytes DLE (0x10) según protocolo V.253 para VTX."""
+    if not payload:
+        return payload
+    return payload.replace(b'\x10', b'\x10\x10')
+
 def play_audio(ser: serial.Serial, audio_file: str):
     """Contesta la llamada y reproduce un archivo de audio en la línea telefónica.
 
@@ -121,6 +127,12 @@ def play_audio(ser: serial.Serial, audio_file: str):
         # Nos aseguramos de clase 8
         ser.write(b'AT+FCLASS=8\r\n')
         time.sleep(0.3)
+        # Activar control de flujo por hardware (si el módem lo soporta)
+        try:
+            ser.write(b'AT+IFC=2,2\r\n')
+            time.sleep(0.2)
+        except Exception:
+            pass
 
         # Autodetección de códec y tasa si está habilitada
         effective_codec = VSM_CODEC
@@ -203,6 +215,11 @@ def play_audio(ser: serial.Serial, audio_file: str):
                 rate_state = None
                 bytes_per_sample_out = 1  # μ-law/A-law/8-bit PCM => 1 byte por muestra
 
+                # Framing de 20 ms
+                samples_per_frame = max(int(effective_rate * 0.02), 1)
+                frame_bytes = samples_per_frame  # μ-law/A-law/PCM8 = 1 byte por muestra
+                out_buffer = b''
+
                 while True:
                     frames = w.readframes(1024)
                     if not frames:
@@ -248,30 +265,56 @@ def play_audio(ser: serial.Serial, audio_file: str):
                         # Por defecto μ-law
                         out = audioop.lin2ulaw(data, 2)
 
-                    ser.write(out)
-                    # Pacing basado en duración del bloque
-                    block_seconds = len(out) / float(effective_rate)
-                    time.sleep(max(block_seconds * 0.95, 0.001))
+                    # Acumular y enviar en frames de 20 ms con escape DLE
+                    out_buffer += out
+                    while len(out_buffer) >= frame_bytes:
+                        chunk = out_buffer[:frame_bytes]
+                        out_buffer = out_buffer[frame_bytes:]
+                        ser.write(escape_dle(chunk))
+                        time.sleep(0.02)
 
                 w.close()
+                # Enviar remanente
+                if out_buffer:
+                    ser.write(escape_dle(out_buffer))
+                    time.sleep(0.01)
             except Exception as e:
                 print(f"❌ Error leyendo/convirtiendo WAV: {e}. Intentando como RAW...")
                 with open(audio_file, 'rb') as f:
+                    samples_per_frame = max(int(effective_rate * 0.02), 1)
+                    frame_bytes = samples_per_frame
+                    out_buffer = b''
                     while True:
                         chunk = f.read(1024)
                         if not chunk:
                             break
-                        ser.write(chunk)
-                        # Pacing aproximado si asumimos 8k/μ-law
-                        time.sleep(max((len(chunk) / float(SAMPLE_RATE)) * 0.95, 0.001))
+                        out_buffer += chunk
+                        while len(out_buffer) >= frame_bytes:
+                            frame = out_buffer[:frame_bytes]
+                            out_buffer = out_buffer[frame_bytes:]
+                            ser.write(escape_dle(frame))
+                            time.sleep(0.02)
+                    if out_buffer:
+                        ser.write(escape_dle(out_buffer))
+                        time.sleep(0.01)
         else:
             with open(audio_file, 'rb') as f:
+                samples_per_frame = max(int(SAMPLE_RATE * 0.02), 1)
+                frame_bytes = samples_per_frame
+                out_buffer = b''
                 while True:
                     chunk = f.read(1024)
                     if not chunk:
                         break
-                    ser.write(chunk)
-                    time.sleep(0.02)
+                    out_buffer += chunk
+                    while len(out_buffer) >= frame_bytes:
+                        frame = out_buffer[:frame_bytes]
+                        out_buffer = out_buffer[frame_bytes:]
+                        ser.write(escape_dle(frame))
+                        time.sleep(0.02)
+                if out_buffer:
+                    ser.write(escape_dle(out_buffer))
+                    time.sleep(0.01)
 
         # Terminar transmisión
         ser.write(b'\x10')  # DLE
