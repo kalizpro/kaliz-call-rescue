@@ -40,6 +40,7 @@ PRE_SILENCE_MS = int(os.getenv("PRE_SILENCE_MS", "150"))
 USE_HARDWARE_PACING = os.getenv("USE_HARDWARE_PACING", "1") in ("1", "true", "TRUE", "yes", "YES")
 FADE_IN_MS = int(os.getenv("FADE_IN_MS", "10"))
 AT_DIAGNOSTICS = os.getenv("AT_DIAGNOSTICS", "1") in ("1", "true", "TRUE", "yes", "YES")
+USE_RTSCTS = os.getenv("USE_RTSCTS", "0") in ("1", "true", "TRUE", "yes", "YES")
 
 # Preferencia regional: si no se definió VSM_CODEC por entorno y el país es Uruguay (598), usar A-law.
 if "VSM_CODEC" not in os.environ and COUNTRY_CODE and COUNTRY_CODE.startswith("598"):
@@ -228,9 +229,14 @@ def play_audio(ser: serial.Serial, audio_file: str):
         # Nos aseguramos de clase 8
         ser.write(b'AT+FCLASS=8\r\n')
         time.sleep(0.3)
-        # Activar control de flujo por hardware (si el módem lo soporta)
+        # Configurar control de flujo según ajuste
         try:
-            ser.write(b'AT+IFC=2,2\r\n')
+            if USE_RTSCTS:
+                print("ℹ️ Control de flujo: RTS/CTS (AT+IFC=2,2)")
+                ser.write(b'AT+IFC=2,2\r\n')
+            else:
+                print("ℹ️ Control de flujo: ninguno (AT+IFC=0,0)")
+                ser.write(b'AT+IFC=0,0\r\n')
             time.sleep(0.2)
         except Exception:
             pass
@@ -503,7 +509,7 @@ def answer_and_hangup(ser: serial.Serial):
 # Inicialización del módem
 # -----------------------------
 try:
-    ser = serial.Serial(PORT, BAUD, timeout=1, rtscts=True, xonxoff=False)
+    ser = serial.Serial(PORT, BAUD, timeout=1, rtscts=USE_RTSCTS, xonxoff=False)
 except Exception as e:
     print(f"No se pudo abrir el puerto {PORT}: {e}")
     exit(1)
