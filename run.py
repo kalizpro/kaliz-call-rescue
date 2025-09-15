@@ -36,7 +36,7 @@ PCM8_SIGNED = os.getenv("PCM8_SIGNED", "0") in ("1", "true", "TRUE", "yes", "YES
 NORMALIZE_RMS = os.getenv("NORMALIZE_RMS", "1") in ("1", "true", "TRUE", "yes", "YES")
 TARGET_RMS = int(os.getenv("TARGET_RMS", "5000"))  # objetivo RMS en PCM 16-bit
 REMOVE_DC = os.getenv("REMOVE_DC", "1") in ("1", "true", "TRUE", "yes", "YES")
-PRE_SILENCE_MS = int(os.getenv("PRE_SILENCE_MS", "150"))
+PRE_SILENCE_MS = int(os.getenv("PRE_SILENCE_MS", "100"))
 
 # -----------------------------
 # Funciones
