@@ -41,6 +41,8 @@ USE_HARDWARE_PACING = os.getenv("USE_HARDWARE_PACING", "1") in ("1", "true", "TR
 FADE_IN_MS = int(os.getenv("FADE_IN_MS", "10"))
 AT_DIAGNOSTICS = os.getenv("AT_DIAGNOSTICS", "1") in ("1", "true", "TRUE", "yes", "YES")
 USE_RTSCTS = os.getenv("USE_RTSCTS", "0") in ("1", "true", "TRUE", "yes", "YES")
+FRAME_MS = int(os.getenv("FRAME_MS", "20"))
+VBS = os.getenv("VBS")
 
 # Preferencia regional: si no se definió VSM_CODEC por entorno y el país es Uruguay (598), usar A-law.
 if "VSM_CODEC" not in os.environ and COUNTRY_CODE and COUNTRY_CODE.startswith("598"):
@@ -301,6 +303,14 @@ def play_audio(ser: serial.Serial, audio_file: str):
         except Exception:
             pass
 
+        # Configurar tamaño de buffer de voz si está definido
+        if VBS is not None and VBS != "":
+            try:
+                ser.write(f"AT+VBS={VBS}\r\n".encode())
+                time.sleep(0.1)
+            except Exception:
+                pass
+
         # Entrar en transmisión de voz
         print("➡️ Entrando en modo VTX...")
         ser.write(b'AT+VTX\r\n')
@@ -340,8 +350,9 @@ def play_audio(ser: serial.Serial, audio_file: str):
                 rate_state = None
                 bytes_per_sample_out = 1  # μ-law/A-law/8-bit PCM => 1 byte por muestra
 
-                # Framing de 20 ms
-                samples_per_frame = max(int(effective_rate * 0.02), 1)
+                # Framing configurable (FRAME_MS)
+                frame_ms = max(FRAME_MS, 5)
+                samples_per_frame = max(int(effective_rate * (frame_ms / 1000.0)), 1)
                 frame_bytes = samples_per_frame  # μ-law/A-law/PCM8 = 1 byte por muestra
                 out_buffer = b''
 
@@ -415,7 +426,8 @@ def play_audio(ser: serial.Serial, audio_file: str):
             except Exception as e:
                 print(f"❌ Error leyendo/convirtiendo WAV: {e}. Intentando como RAW...")
                 with open(audio_file, 'rb') as f:
-                    samples_per_frame = max(int(effective_rate * 0.02), 1)
+                    frame_ms = max(FRAME_MS, 5)
+                    samples_per_frame = max(int(effective_rate * (frame_ms / 1000.0)), 1)
                     frame_bytes = samples_per_frame
                     out_buffer = b''
                     next_deadline = time.monotonic()
@@ -438,7 +450,8 @@ def play_audio(ser: serial.Serial, audio_file: str):
                         time.sleep(0.01)
         else:
             with open(audio_file, 'rb') as f:
-                samples_per_frame = max(int(SAMPLE_RATE * 0.02), 1)
+                frame_ms = max(FRAME_MS, 5)
+                samples_per_frame = max(int(SAMPLE_RATE * (frame_ms / 1000.0)), 1)
                 frame_bytes = samples_per_frame
                 out_buffer = b''
                 next_deadline = time.monotonic()
