@@ -6,13 +6,16 @@ import requests
 import csv
 import wave
 import audioop
+import warnings
 from datetime import datetime
 from dotenv import load_dotenv
 
 # -----------------------------
 # Configuración
 # -----------------------------
-load_dotenv()
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    load_dotenv()
 LOCAL_NUMBER = os.getenv("NUMBER")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = os.getenv("PORT", "/dev/ttyACM0")
@@ -101,17 +104,13 @@ def play_audio(ser: serial.Serial, audio_file: str):
             print("⚠️ ATA no conectó, intentando AT+VLS=1...")
             ser.write(b'AT+VLS=1\r\n')
             time.sleep(0.8)
-            response = ""
-            timeout = time.time() + 5
-            while ("CONNECT" not in response and "VCON" not in response) and time.time() < timeout:
+            # Algunos módems solo responden OK aquí, pero la línea queda en voz
+            # Continuamos de todas formas a configurar VSM/VTX
+            start = time.time()
+            while time.time() - start < 2:
                 line = ser.readline().decode(errors="ignore").strip()
                 if line:
-                    response = line
                     print(f"DEBUG(VLS): {line}")
-            if ("CONNECT" not in response and "VCON" not in response):
-                print("❌ No se pudo levantar la llamada en modo voz. Colgando.")
-                ser.write(b'ATH\r\n')
-                return
 
         # Cambiar a modo voz y formato
         print("🎙️ Cambiando a modo voz para reproducir audio...")
