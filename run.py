@@ -5,6 +5,7 @@ import os
 import requests
 import csv
 import wave
+import audioop
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -137,29 +138,71 @@ def play_audio(ser: serial.Serial, audio_file: str):
         if audio_file.lower().endswith('.wav'):
             try:
                 w = wave.open(audio_file, 'rb')
-                # Validar mono y 8k si es posible
                 channels = getattr(w, 'getnchannels', lambda:1)()
                 framerate = getattr(w, 'getframerate', lambda:8000)()
-                if channels != 1 or framerate != 8000:
-                    print(f"⚠️ WAV no es mono/8kHz (canales={channels}, hz={framerate}). Puede sonar mal.")
-                # Si usamos μ-law, convertimos on-the-fly si el WAV ya está en PCM u8
-                # Nota: para producción, conviene preconvertir con ffmpeg
+                sampwidth = getattr(w, 'getsampwidth', lambda:2)()
+
+                print(f"ℹ️ WAV: canales={channels}, hz={framerate}, sampwidth={sampwidth}")
+                if channels != 1 or framerate != SAMPLE_RATE or sampwidth not in (1, 2, 4):
+                    print("⚠️ Ajustando audio a mono, 8kHz y formato esperado del módem...")
+
+                # Conversión incremental por bloques
+                # Mantener estado para rate conversion
+                rate_state = None
+                bytes_per_sample_out = 1  # μ-law/A-law/8-bit PCM => 1 byte por muestra
+
                 while True:
                     frames = w.readframes(1024)
                     if not frames:
                         break
-                    ser.write(frames)
-                    time.sleep(0.02)
+
+                    data = frames
+
+                    # Asegurar formato lineal 16-bit para las conversiones siguientes
+                    if sampwidth != 2:
+                        try:
+                            data = audioop.lin2lin(data, sampwidth, 2)
+                        except Exception:
+                            # Si no se puede convertir, saltar bloque
+                            continue
+
+                    # Convertir a mono si hace falta
+                    if channels and channels != 1:
+                        data = audioop.tomono(data, 2, 0.5, 0.5)
+
+                    # Resamplear a SAMPLE_RATE si es necesario
+                    if framerate and framerate != SAMPLE_RATE:
+                        data, rate_state = audioop.ratecv(data, 2, 1, framerate, SAMPLE_RATE, rate_state)
+
+                    # Convertir al códec elegido
+                    if VSM_CODEC == 130:  # μ-law
+                        out = audioop.lin2ulaw(data, 2)
+                    elif VSM_CODEC == 129:  # A-law
+                        out = audioop.lin2alaw(data, 2)
+                    elif VSM_CODEC == 128:  # 8-bit PCM (firmas varían; asumimos signed -> unsigned bias)
+                        pcm8_signed = audioop.lin2lin(data, 2, 1)
+                        # Convertir de signed [-128,127] a unsigned [0,255]
+                        out = bytes((b + 128) % 256 for b in pcm8_signed)
+                    else:
+                        # Por defecto μ-law
+                        out = audioop.lin2ulaw(data, 2)
+
+                    ser.write(out)
+                    # Pacing basado en duración del bloque
+                    block_seconds = len(out) / float(SAMPLE_RATE)
+                    time.sleep(max(block_seconds * 0.95, 0.001))
+
                 w.close()
             except Exception as e:
-                print(f"❌ Error leyendo WAV: {e}. Intentando como RAW...")
+                print(f"❌ Error leyendo/convirtiendo WAV: {e}. Intentando como RAW...")
                 with open(audio_file, 'rb') as f:
                     while True:
                         chunk = f.read(1024)
                         if not chunk:
                             break
                         ser.write(chunk)
-                        time.sleep(0.02)
+                        # Pacing aproximado si asumimos 8k/μ-law
+                        time.sleep(max((len(chunk) / float(SAMPLE_RATE)) * 0.95, 0.001))
         else:
             with open(audio_file, 'rb') as f:
                 while True:
