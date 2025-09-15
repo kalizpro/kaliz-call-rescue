@@ -216,6 +216,50 @@ def play_audio(ser: serial.Serial, audio_file: str):
                 print(f"ℹ️ VSM autodetectado: codec={effective_codec}, rate={effective_rate}")
             except Exception:
                 print("⚠️ No se pudo autodetectar VSM; usando configuración por defecto")
+        else:
+            # Validación de códec/tasa contra capacidades reales del módem
+            try:
+                ser.write(b'AT+VSM=?\r\n')
+                time.sleep(0.25)
+                supported_line = ""
+                start = time.time()
+                while time.time() - start < 1.5:
+                    line = ser.readline().decode(errors="ignore").strip()
+                    if line:
+                        if "+VSM" in line or line.startswith("("):
+                            supported_line = line
+                            break
+                codecs = []
+                rates = []
+                groups = re.findall(r"\(([^)]*)\)", supported_line)
+                if groups:
+                    try:
+                        codecs = [int(x) for x in re.split(r"[, ]+", groups[0].strip()) if x]
+                    except Exception:
+                        codecs = []
+                    if len(groups) > 1:
+                        try:
+                            rates = [int(x) for x in re.split(r"[, ]+", groups[1].strip()) if x]
+                        except Exception:
+                            rates = []
+                # Si el códec forzado no está soportado, elegir el mejor disponible
+                if codecs and effective_codec not in codecs:
+                    for preferred in (130, 129, 128):
+                        if preferred in codecs:
+                            print(f"⚠️ VSM_CODEC forzado {VSM_CODEC} no soportado. Usando {preferred}.")
+                            effective_codec = preferred
+                            break
+                    else:
+                        print("⚠️ Lista de códecs vacía o no interpretable; se mantiene configuración actual")
+                # Elegir una tasa soportada (preferir 8000 Hz)
+                if rates:
+                    if 8000 in rates:
+                        effective_rate = 8000
+                    else:
+                        effective_rate = rates[0]
+                print(f"ℹ️ VSM validado: codec={effective_codec}, rate={effective_rate}")
+            except Exception:
+                print("⚠️ No se pudo validar VSM contra el módem; usando configuración por defecto")
 
         ser.write(f"AT+VSM={effective_codec},{effective_rate}\r\n".encode())
         time.sleep(0.4)
