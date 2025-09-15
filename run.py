@@ -37,6 +37,9 @@ NORMALIZE_RMS = os.getenv("NORMALIZE_RMS", "1") in ("1", "true", "TRUE", "yes", 
 TARGET_RMS = int(os.getenv("TARGET_RMS", "5000"))  # objetivo RMS en PCM 16-bit
 REMOVE_DC = os.getenv("REMOVE_DC", "1") in ("1", "true", "TRUE", "yes", "YES")
 PRE_SILENCE_MS = int(os.getenv("PRE_SILENCE_MS", "150"))
+USE_HARDWARE_PACING = os.getenv("USE_HARDWARE_PACING", "1") in ("1", "true", "TRUE", "yes", "YES")
+FADE_IN_MS = int(os.getenv("FADE_IN_MS", "10"))
+AT_DIAGNOSTICS = os.getenv("AT_DIAGNOSTICS", "1") in ("1", "true", "TRUE", "yes", "YES")
 
 # -----------------------------
 # Funciones
@@ -124,6 +127,57 @@ def process_pcm16_block(data: bytes) -> bytes:
         return processed
     except Exception:
         return data
+
+def send_at(ser: serial.Serial, command: str, timeout_s: float = 1.5, pause_s: float = 0.1) -> list:
+    """Envía un comando AT y devuelve las líneas recibidas dentro del timeout.
+    Loguea lo enviado y recibido para diagnóstico.
+    """
+    try:
+        if not command.endswith("\r\n"):
+            cmd = (command + "\r\n").encode()
+        else:
+            cmd = command.encode()
+        print(f"AT> {command.strip()}")
+        ser.write(cmd)
+        time.sleep(pause_s)
+        lines = []
+        deadline = time.time() + max(timeout_s, 0.2)
+        while time.time() < deadline:
+            raw = ser.readline()
+            if not raw:
+                continue
+            line = raw.decode(errors="ignore").strip()
+            if not line:
+                continue
+            print(f"AT< {line}")
+            lines.append(line)
+            # detener si vemos OK/ERROR típicos
+            if line in ("OK", "ERROR"):
+                break
+        return lines
+    except Exception as e:
+        print(f"AT! Error enviando '{command}': {e}")
+        return []
+
+def run_modem_diagnostics(ser: serial.Serial):
+    """Ejecuta comandos AT comunes y muestra capacidades para que el usuario copie los logs."""
+    print("===== DIAGNÓSTICO INICIAL DEL MÓDEM =====")
+    for cmd in (
+        "ATI",
+        "ATI3",
+        "AT+FCLASS=?",
+        "AT+FCLASS?",
+        "AT+VLS=?",
+        "AT+VSM=?",
+        "AT+IFC?",
+        "AT+VGT=?",
+        "AT+VGR=?",
+        "AT+VBS?",
+        "AT+VRA?",
+        "AT+VRN?",
+    ):
+        send_at(ser, cmd, timeout_s=2.0)
+    print("===== FIN DIAGNÓSTICO =====")
 
 def play_audio(ser: serial.Serial, audio_file: str):
     """Contesta la llamada y reproduce un archivo de audio en la línea telefónica.
@@ -464,6 +518,10 @@ ser.write(b'ATX4\r')        # habilitar códigos extendidos
 time.sleep(0.2)
 ser.write(b'ATV1\r')        # habilitar códigos de palabra completa
 time.sleep(0.2)
+
+# Diagnóstico inicial opcional
+if AT_DIAGNOSTICS:
+    run_modem_diagnostics(ser)
 
 print(f"📡 Línea configurada en {LOCAL_NUMBER}. Esperando llamadas...")
 
