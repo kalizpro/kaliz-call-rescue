@@ -506,12 +506,12 @@ try:
                     if PLAY_AUDIO:
                         print("📢 Alcanzado MAX_RINGS. Enviando webhook y reproduciendo audio...")
                         log_call(incoming_number, LOCAL_NUMBER, "answered_with_audio")
-                        call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "answered_with_audio")
+                        #call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "answered_with_audio")
                         play_audio(ser, AUDIO_FILE)
                     else:
                         print("📢 Alcanzado MAX_RINGS. Enviando webhook y colgando...")
                         log_call(incoming_number, LOCAL_NUMBER, "hangup_after_webhook")
-                        call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "hangup_after_webhook")
+                        #call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "hangup_after_webhook")
                         answer_and_hangup(ser)
                     incoming_number = None
                     call_active = False
@@ -522,7 +522,7 @@ try:
             if call_active and incoming_number:
                 print("📵 Línea ocupada o llamada terminada rápido")
                 log_call(incoming_number, LOCAL_NUMBER, "busy")
-                call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "busy")
+                #call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "busy")
                 incoming_number = None
                 call_active = False
                 ring_count = 0
