@@ -82,6 +82,17 @@ def escape_dle(payload: bytes) -> bytes:
         return payload
     return payload.replace(b'\x10', b'\x10\x10')
 
+def get_silence_byte(codec: int) -> int:
+    """Devuelve el byte de silencio para el códec dado.
+    μ-law: 0xFF, A-law: 0xD5, PCM8 unsigned: 0x80 (o 0x00 si signed).
+    """
+    if codec == 130:  # μ-law
+        return 0xFF
+    if codec == 129:  # A-law
+        return 0xD5
+    # 8-bit PCM
+    return 0x80 if not PCM8_SIGNED else 0x00
+
 def play_audio(ser: serial.Serial, audio_file: str):
     """Contesta la llamada y reproduce un archivo de audio en la línea telefónica.
 
@@ -185,6 +196,15 @@ def play_audio(ser: serial.Serial, audio_file: str):
             except Exception:
                 pass
 
+        # Intento de desactivar AGC/ruido si existe
+        try:
+            ser.write(b'AT+VRA=0\r\n')  # AGC off (si soporta)
+            time.sleep(0.1)
+            ser.write(b'AT+VRN=0\r\n')  # Noise reduction off (si soporta)
+            time.sleep(0.1)
+        except Exception:
+            pass
+
         # Entrar en transmisión de voz
         print("➡️ Entrando en modo VTX...")
         ser.write(b'AT+VTX\r\n')
@@ -196,6 +216,15 @@ def play_audio(ser: serial.Serial, audio_file: str):
                 print(f"DEBUG(VTX): {line}")
                 if ("CONNECT" in line) or ("VCON" in line) or ("OK" in line):
                     break
+
+        # Enviar 100 ms de silencio inicial para estabilizar
+        silence_ms = 100
+        silence_samples = int(effective_rate * (silence_ms / 1000.0))
+        silence_byte = get_silence_byte(effective_codec)
+        if silence_samples > 0:
+            pre_silence = bytes([silence_byte]) * silence_samples
+            ser.write(escape_dle(pre_silence))
+            time.sleep(silence_ms / 1000.0)
 
         # Reproducir audio
         print("▶️ Reproduciendo audio...")
@@ -220,6 +249,8 @@ def play_audio(ser: serial.Serial, audio_file: str):
                 frame_bytes = samples_per_frame  # μ-law/A-law/PCM8 = 1 byte por muestra
                 out_buffer = b''
 
+                # Temporización por reloj monotónico
+                next_deadline = time.monotonic()
                 while True:
                     frames = w.readframes(1024)
                     if not frames:
@@ -271,7 +302,11 @@ def play_audio(ser: serial.Serial, audio_file: str):
                         chunk = out_buffer[:frame_bytes]
                         out_buffer = out_buffer[frame_bytes:]
                         ser.write(escape_dle(chunk))
-                        time.sleep(0.02)
+                        next_deadline += 0.02
+                        now = time.monotonic()
+                        delay = next_deadline - now
+                        if delay > 0:
+                            time.sleep(delay)
 
                 w.close()
                 # Enviar remanente
@@ -284,6 +319,7 @@ def play_audio(ser: serial.Serial, audio_file: str):
                     samples_per_frame = max(int(effective_rate * 0.02), 1)
                     frame_bytes = samples_per_frame
                     out_buffer = b''
+                    next_deadline = time.monotonic()
                     while True:
                         chunk = f.read(1024)
                         if not chunk:
@@ -293,7 +329,11 @@ def play_audio(ser: serial.Serial, audio_file: str):
                             frame = out_buffer[:frame_bytes]
                             out_buffer = out_buffer[frame_bytes:]
                             ser.write(escape_dle(frame))
-                            time.sleep(0.02)
+                            next_deadline += 0.02
+                            now = time.monotonic()
+                            delay = next_deadline - now
+                            if delay > 0:
+                                time.sleep(delay)
                     if out_buffer:
                         ser.write(escape_dle(out_buffer))
                         time.sleep(0.01)
@@ -302,6 +342,7 @@ def play_audio(ser: serial.Serial, audio_file: str):
                 samples_per_frame = max(int(SAMPLE_RATE * 0.02), 1)
                 frame_bytes = samples_per_frame
                 out_buffer = b''
+                next_deadline = time.monotonic()
                 while True:
                     chunk = f.read(1024)
                     if not chunk:
@@ -311,7 +352,11 @@ def play_audio(ser: serial.Serial, audio_file: str):
                         frame = out_buffer[:frame_bytes]
                         out_buffer = out_buffer[frame_bytes:]
                         ser.write(escape_dle(frame))
-                        time.sleep(0.02)
+                        next_deadline += 0.02
+                        now = time.monotonic()
+                        delay = next_deadline - now
+                        if delay > 0:
+                            time.sleep(delay)
                 if out_buffer:
                     ser.write(escape_dle(out_buffer))
                     time.sleep(0.01)
@@ -365,7 +410,7 @@ def answer_and_hangup(ser: serial.Serial):
 # Inicialización del módem
 # -----------------------------
 try:
-    ser = serial.Serial(PORT, BAUD, timeout=1)
+    ser = serial.Serial(PORT, BAUD, timeout=1, rtscts=True, xonxoff=False)
 except Exception as e:
     print(f"No se pudo abrir el puerto {PORT}: {e}")
     exit(1)
