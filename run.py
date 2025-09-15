@@ -37,16 +37,6 @@ NORMALIZE_RMS = os.getenv("NORMALIZE_RMS", "1") in ("1", "true", "TRUE", "yes", 
 TARGET_RMS = int(os.getenv("TARGET_RMS", "5000"))  # objetivo RMS en PCM 16-bit
 REMOVE_DC = os.getenv("REMOVE_DC", "1") in ("1", "true", "TRUE", "yes", "YES")
 PRE_SILENCE_MS = int(os.getenv("PRE_SILENCE_MS", "150"))
-USE_HARDWARE_PACING = os.getenv("USE_HARDWARE_PACING", "1") in ("1", "true", "TRUE", "yes", "YES")
-FADE_IN_MS = int(os.getenv("FADE_IN_MS", "10"))
-AT_DIAGNOSTICS = os.getenv("AT_DIAGNOSTICS", "1") in ("1", "true", "TRUE", "yes", "YES")
-USE_RTSCTS = os.getenv("USE_RTSCTS", "0") in ("1", "true", "TRUE", "yes", "YES")
-FRAME_MS = int(os.getenv("FRAME_MS", "20"))
-VBS = os.getenv("VBS")
-
-# Preferencia regional: si no se definió VSM_CODEC por entorno y el país es Uruguay (598), usar A-law.
-if "VSM_CODEC" not in os.environ and COUNTRY_CODE and COUNTRY_CODE.startswith("598"):
-    VSM_CODEC = 129
 
 # -----------------------------
 # Funciones
@@ -135,57 +125,6 @@ def process_pcm16_block(data: bytes) -> bytes:
     except Exception:
         return data
 
-def send_at(ser: serial.Serial, command: str, timeout_s: float = 1.5, pause_s: float = 0.1) -> list:
-    """Envía un comando AT y devuelve las líneas recibidas dentro del timeout.
-    Loguea lo enviado y recibido para diagnóstico.
-    """
-    try:
-        if not command.endswith("\r\n"):
-            cmd = (command + "\r\n").encode()
-        else:
-            cmd = command.encode()
-        print(f"AT> {command.strip()}")
-        ser.write(cmd)
-        time.sleep(pause_s)
-        lines = []
-        deadline = time.time() + max(timeout_s, 0.2)
-        while time.time() < deadline:
-            raw = ser.readline()
-            if not raw:
-                continue
-            line = raw.decode(errors="ignore").strip()
-            if not line:
-                continue
-            print(f"AT< {line}")
-            lines.append(line)
-            # detener si vemos OK/ERROR típicos
-            if line in ("OK", "ERROR"):
-                break
-        return lines
-    except Exception as e:
-        print(f"AT! Error enviando '{command}': {e}")
-        return []
-
-def run_modem_diagnostics(ser: serial.Serial):
-    """Ejecuta comandos AT comunes y muestra capacidades para que el usuario copie los logs."""
-    print("===== DIAGNÓSTICO INICIAL DEL MÓDEM =====")
-    for cmd in (
-        "ATI",
-        "ATI3",
-        "AT+FCLASS=?",
-        "AT+FCLASS?",
-        "AT+VLS=?",
-        "AT+VSM=?",
-        "AT+IFC?",
-        "AT+VGT=?",
-        "AT+VGR=?",
-        "AT+VBS?",
-        "AT+VRA?",
-        "AT+VRN?",
-    ):
-        send_at(ser, cmd, timeout_s=2.0)
-    print("===== FIN DIAGNÓSTICO =====")
-
 def play_audio(ser: serial.Serial, audio_file: str):
     """Contesta la llamada y reproduce un archivo de audio en la línea telefónica.
 
@@ -231,14 +170,9 @@ def play_audio(ser: serial.Serial, audio_file: str):
         # Nos aseguramos de clase 8
         ser.write(b'AT+FCLASS=8\r\n')
         time.sleep(0.3)
-        # Configurar control de flujo según ajuste
+        # Activar control de flujo por hardware (si el módem lo soporta)
         try:
-            if USE_RTSCTS:
-                print("ℹ️ Control de flujo: RTS/CTS (AT+IFC=2,2)")
-                ser.write(b'AT+IFC=2,2\r\n')
-            else:
-                print("ℹ️ Control de flujo: ninguno (AT+IFC=0,0)")
-                ser.write(b'AT+IFC=0,0\r\n')
+            ser.write(b'AT+IFC=2,2\r\n')
             time.sleep(0.2)
         except Exception:
             pass
@@ -303,14 +237,6 @@ def play_audio(ser: serial.Serial, audio_file: str):
         except Exception:
             pass
 
-        # Configurar tamaño de buffer de voz si está definido
-        if VBS is not None and VBS != "":
-            try:
-                ser.write(f"AT+VBS={VBS}\r\n".encode())
-                time.sleep(0.1)
-            except Exception:
-                pass
-
         # Entrar en transmisión de voz
         print("➡️ Entrando en modo VTX...")
         ser.write(b'AT+VTX\r\n')
@@ -350,9 +276,8 @@ def play_audio(ser: serial.Serial, audio_file: str):
                 rate_state = None
                 bytes_per_sample_out = 1  # μ-law/A-law/8-bit PCM => 1 byte por muestra
 
-                # Framing configurable (FRAME_MS)
-                frame_ms = max(FRAME_MS, 5)
-                samples_per_frame = max(int(effective_rate * (frame_ms / 1000.0)), 1)
+                # Framing de 20 ms
+                samples_per_frame = max(int(effective_rate * 0.02), 1)
                 frame_bytes = samples_per_frame  # μ-law/A-law/PCM8 = 1 byte por muestra
                 out_buffer = b''
 
@@ -426,8 +351,7 @@ def play_audio(ser: serial.Serial, audio_file: str):
             except Exception as e:
                 print(f"❌ Error leyendo/convirtiendo WAV: {e}. Intentando como RAW...")
                 with open(audio_file, 'rb') as f:
-                    frame_ms = max(FRAME_MS, 5)
-                    samples_per_frame = max(int(effective_rate * (frame_ms / 1000.0)), 1)
+                    samples_per_frame = max(int(effective_rate * 0.02), 1)
                     frame_bytes = samples_per_frame
                     out_buffer = b''
                     next_deadline = time.monotonic()
@@ -450,8 +374,7 @@ def play_audio(ser: serial.Serial, audio_file: str):
                         time.sleep(0.01)
         else:
             with open(audio_file, 'rb') as f:
-                frame_ms = max(FRAME_MS, 5)
-                samples_per_frame = max(int(SAMPLE_RATE * (frame_ms / 1000.0)), 1)
+                samples_per_frame = max(int(SAMPLE_RATE * 0.02), 1)
                 frame_bytes = samples_per_frame
                 out_buffer = b''
                 next_deadline = time.monotonic()
@@ -522,7 +445,7 @@ def answer_and_hangup(ser: serial.Serial):
 # Inicialización del módem
 # -----------------------------
 try:
-    ser = serial.Serial(PORT, BAUD, timeout=1, rtscts=USE_RTSCTS, xonxoff=False)
+    ser = serial.Serial(PORT, BAUD, timeout=1, rtscts=True, xonxoff=False)
 except Exception as e:
     print(f"No se pudo abrir el puerto {PORT}: {e}")
     exit(1)
@@ -541,10 +464,6 @@ ser.write(b'ATX4\r')        # habilitar códigos extendidos
 time.sleep(0.2)
 ser.write(b'ATV1\r')        # habilitar códigos de palabra completa
 time.sleep(0.2)
-
-# Diagnóstico inicial opcional
-if AT_DIAGNOSTICS:
-    run_modem_diagnostics(ser)
 
 print(f"📡 Línea configurada en {LOCAL_NUMBER}. Esperando llamadas...")
 
