@@ -5,8 +5,9 @@ import os
 import requests
 import csv
 import wave
-import audioop
 import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+import audioop
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -29,6 +30,9 @@ HANGUP_DELAY_MS = int(os.getenv("HANGUP_DELAY_MS", "1200"))
 PLAY_AUDIO = os.getenv("PLAY_AUDIO", "1") in ("1", "true", "TRUE", "yes", "YES")
 VSM_CODEC = int(os.getenv("VSM_CODEC", "130"))  # 130: μ-law, 129: A-law, 128: 8-bit PCM
 SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "8000"))
+AUTO_VSM = os.getenv("AUTO_VSM", "1") in ("1", "true", "TRUE", "yes", "YES")
+TX_GAIN = os.getenv("TX_GAIN")
+PCM8_SIGNED = os.getenv("PCM8_SIGNED", "0") in ("1", "true", "TRUE", "yes", "YES")
 
 # -----------------------------
 # Funciones
@@ -114,11 +118,60 @@ def play_audio(ser: serial.Serial, audio_file: str):
 
         # Cambiar a modo voz y formato
         print("🎙️ Cambiando a modo voz para reproducir audio...")
-        # Nos aseguramos de clase 8 y configuramos códec y muestreo
+        # Nos aseguramos de clase 8
         ser.write(b'AT+FCLASS=8\r\n')
         time.sleep(0.3)
-        ser.write(f"AT+VSM={VSM_CODEC},{SAMPLE_RATE}\r\n".encode())
-        time.sleep(0.5)
+
+        # Autodetección de códec y tasa si está habilitada
+        effective_codec = VSM_CODEC
+        effective_rate = SAMPLE_RATE
+        if AUTO_VSM:
+            try:
+                ser.write(b'AT+VSM=?\r\n')
+                time.sleep(0.25)
+                supported_line = ""
+                start = time.time()
+                while time.time() - start < 1.5:
+                    line = ser.readline().decode(errors="ignore").strip()
+                    if line:
+                        if "+VSM" in line or line.startswith("("):
+                            supported_line = line
+                            break
+                codecs = []
+                rates = []
+                groups = re.findall(r"\(([^)]*)\)", supported_line)
+                if groups:
+                    try:
+                        codecs = [int(x) for x in re.split(r"[, ]+", groups[0].strip()) if x]
+                    except Exception:
+                        codecs = []
+                    if len(groups) > 1:
+                        try:
+                            rates = [int(x) for x in re.split(r"[, ]+", groups[1].strip()) if x]
+                        except Exception:
+                            rates = []
+                for preferred in (130, 129, 128):
+                    if preferred in codecs:
+                        effective_codec = preferred
+                        break
+                if 8000 in rates:
+                    effective_rate = 8000
+                elif rates:
+                    effective_rate = rates[0]
+                print(f"ℹ️ VSM autodetectado: codec={effective_codec}, rate={effective_rate}")
+            except Exception:
+                print("⚠️ No se pudo autodetectar VSM; usando configuración por defecto")
+
+        ser.write(f"AT+VSM={effective_codec},{effective_rate}\r\n".encode())
+        time.sleep(0.4)
+
+        # Ganancia de transmisión si está configurada
+        if TX_GAIN is not None and TX_GAIN != "":
+            try:
+                ser.write(f"AT+VGT={TX_GAIN}\r\n".encode())
+                time.sleep(0.2)
+            except Exception:
+                pass
 
         # Entrar en transmisión de voz
         print("➡️ Entrando en modo VTX...")
@@ -160,7 +213,13 @@ def play_audio(ser: serial.Serial, audio_file: str):
                     # Asegurar formato lineal 16-bit para las conversiones siguientes
                     if sampwidth != 2:
                         try:
-                            data = audioop.lin2lin(data, sampwidth, 2)
+                            src_width = sampwidth
+                            src_data = data
+                            # WAV PCM 8-bit suele ser unsigned. Si no marcamos PCM8_SIGNED, convertimos a signed.
+                            if sampwidth == 1 and not PCM8_SIGNED:
+                                src_data = audioop.bias(src_data, 1, -128)
+                                src_width = 1
+                            data = audioop.lin2lin(src_data, src_width, 2)
                         except Exception:
                             # Si no se puede convertir, saltar bloque
                             continue
@@ -169,26 +228,29 @@ def play_audio(ser: serial.Serial, audio_file: str):
                     if channels and channels != 1:
                         data = audioop.tomono(data, 2, 0.5, 0.5)
 
-                    # Resamplear a SAMPLE_RATE si es necesario
-                    if framerate and framerate != SAMPLE_RATE:
-                        data, rate_state = audioop.ratecv(data, 2, 1, framerate, SAMPLE_RATE, rate_state)
+                    # Resamplear a la tasa efectiva si es necesario
+                    if framerate and framerate != effective_rate:
+                        data, rate_state = audioop.ratecv(data, 2, 1, framerate, effective_rate, rate_state)
 
                     # Convertir al códec elegido
-                    if VSM_CODEC == 130:  # μ-law
+                    if effective_codec == 130:  # μ-law
                         out = audioop.lin2ulaw(data, 2)
-                    elif VSM_CODEC == 129:  # A-law
+                    elif effective_codec == 129:  # A-law
                         out = audioop.lin2alaw(data, 2)
-                    elif VSM_CODEC == 128:  # 8-bit PCM (firmas varían; asumimos signed -> unsigned bias)
+                    elif effective_codec == 128:  # 8-bit PCM
                         pcm8_signed = audioop.lin2lin(data, 2, 1)
-                        # Convertir de signed [-128,127] a unsigned [0,255]
-                        out = bytes((b + 128) % 256 for b in pcm8_signed)
+                        if PCM8_SIGNED:
+                            out = pcm8_signed
+                        else:
+                            # Convertir de signed [-128,127] a unsigned [0,255]
+                            out = bytes((b + 128) % 256 for b in pcm8_signed)
                     else:
                         # Por defecto μ-law
                         out = audioop.lin2ulaw(data, 2)
 
                     ser.write(out)
                     # Pacing basado en duración del bloque
-                    block_seconds = len(out) / float(SAMPLE_RATE)
+                    block_seconds = len(out) / float(effective_rate)
                     time.sleep(max(block_seconds * 0.95, 0.001))
 
                 w.close()
