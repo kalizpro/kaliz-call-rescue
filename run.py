@@ -563,23 +563,28 @@ try:
 
         # Detecta timbre
         elif "RING" in line or line == "R":
-            if call_active:
-                ring_count += 1
-                print(f"📞 Ring {ring_count} de {incoming_number}")
-                if ring_count >= MAX_RINGS:
-                    if PLAY_AUDIO:
-                        print("📢 Alcanzado MAX_RINGS. Enviando webhook y reproduciendo audio...")
-                        log_call(incoming_number, LOCAL_NUMBER, "answered_with_audio")
-                        call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "answered_with_audio")
-                        play_audio(ser, AUDIO_FILE)
-                    else:
-                        print("📢 Alcanzado MAX_RINGS. Enviando webhook y colgando...")
-                        log_call(incoming_number, LOCAL_NUMBER, "hangup_after_webhook")
-                        call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "hangup_after_webhook")
-                        answer_and_hangup(ser)
-                    incoming_number = None
-                    call_active = False
-                    ring_count = 0
+            # Si no hubo Caller ID, iniciamos la llamada con número desconocido
+            if not call_active:
+                call_active = True
+                if not incoming_number:
+                    incoming_number = "unknown"
+                ring_count = 0
+            ring_count += 1
+            print(f"📞 Ring {ring_count} de {incoming_number}")
+            if ring_count >= MAX_RINGS:
+                if PLAY_AUDIO:
+                    print("📢 Alcanzado MAX_RINGS. Enviando webhook y reproduciendo audio...")
+                    log_call(incoming_number, LOCAL_NUMBER, "answered_with_audio")
+                    call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "answered_with_audio")
+                    play_audio(ser, AUDIO_FILE)
+                else:
+                    print("📢 Alcanzado MAX_RINGS. Enviando webhook y colgando...")
+                    log_call(incoming_number, LOCAL_NUMBER, "hangup_after_webhook")
+                    call_rescue_web_hook(incoming_number, LOCAL_NUMBER, "hangup_after_webhook")
+                    answer_and_hangup(ser)
+                incoming_number = None
+                call_active = False
+                ring_count = 0
 
         # Detecta línea ocupada o corte inmediato
         elif "BUSY" in line or "NO CARRIER" in line:
