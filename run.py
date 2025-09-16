@@ -499,15 +499,21 @@ ser.write(b'AT&F\r')        # Cargar configuración de fábrica
 time.sleep(0.5)
 ser.write(b'ATE0\r')        # desactivar eco
 time.sleep(0.2)
-ser.write(b'AT+FCLASS=0\r') # modo datos/idle para detectar RING de forma amplia
+ser.write(b'ATQ0\r')        # habilitar códigos de resultado (no silenciar)
 time.sleep(0.2)
-ser.write(b'ATS0=0\r')      # no contestar automáticamente
-time.sleep(0.2)
-ser.write(b'AT+VCID=1\r')   # habilitar Caller ID
+ser.write(b'ATV1\r')        # habilitar códigos de palabra completa
 time.sleep(0.2)
 ser.write(b'ATX4\r')        # habilitar códigos extendidos
 time.sleep(0.2)
-ser.write(b'ATV1\r')        # habilitar códigos de palabra completa
+ser.write(b'ATS0=0\r')      # no contestar automáticamente
+time.sleep(0.2)
+ser.write(b'AT+FCLASS=8\r') # clase de voz para configurar Caller ID
+time.sleep(0.2)
+ser.write(b'AT+VCID=1\r')   # habilitar Caller ID
+time.sleep(0.2)
+ser.write(b'AT+FCLASS=0\r') # volver a clase 0 para detección amplia de RING
+time.sleep(0.2)
+ser.write(b'AT+CR=1\r')     # habilitar reporte de cadencia de llamada (si soporta)
 time.sleep(0.2)
 
 print(f"📡 Línea configurada en {LOCAL_NUMBER}. Esperando llamadas...")
@@ -541,6 +547,8 @@ try:
             continue
 
         line = raw.decode(errors="ignore").strip()
+        # Loguear toda línea para diagnóstico de RING/VCID
+        print(f"MODEM< {line}")
         line = re.sub(r'[^\x20-\x7E]', '', line)
 
         if not line or line == "OK":
