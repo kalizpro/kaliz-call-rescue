@@ -499,7 +499,7 @@ ser.write(b'AT&F\r')        # Cargar configuración de fábrica
 time.sleep(0.5)
 ser.write(b'ATE0\r')        # desactivar eco
 time.sleep(0.2)
-ser.write(b'AT+FCLASS=8\r') # modo voz (inicialmente, para detectar el Caller ID)
+ser.write(b'AT+FCLASS=0\r') # modo datos/idle para detectar RING de forma amplia
 time.sleep(0.2)
 ser.write(b'ATS0=0\r')      # no contestar automáticamente
 time.sleep(0.2)
