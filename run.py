@@ -507,13 +507,12 @@ ser.write(b'ATX4\r')        # habilitar códigos extendidos
 time.sleep(0.2)
 ser.write(b'ATS0=0\r')      # no contestar automáticamente
 time.sleep(0.2)
-ser.write(b'AT+FCLASS=8\r') # clase de voz para configurar Caller ID
+ser.write(b'AT+FCLASS=8\r') # permanecer en clase voz para VCID/RING
 time.sleep(0.2)
-ser.write(b'AT+VCID=1\r')   # habilitar Caller ID
+ser.write(b'AT+VCID=1\r')   # habilitar Caller ID (estándar +VCID)
 time.sleep(0.2)
-ser.write(b'AT+FCLASS=0\r') # volver a clase 0 para detección amplia de RING
-time.sleep(0.2)
-ser.write(b'AT+CR=1\r')     # habilitar reporte de cadencia de llamada (si soporta)
+# Fallback para módems que usan #CID
+ser.write(b'AT#CID=1\r')
 time.sleep(0.2)
 
 print(f"📡 Línea configurada en {LOCAL_NUMBER}. Esperando llamadas...")
