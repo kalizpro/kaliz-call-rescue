@@ -37,6 +37,7 @@ NORMALIZE_RMS = os.getenv("NORMALIZE_RMS", "1") in ("1", "true", "TRUE", "yes", 
 TARGET_RMS = int(os.getenv("TARGET_RMS", "5000"))  # objetivo RMS en PCM 16-bit
 REMOVE_DC = os.getenv("REMOVE_DC", "1") in ("1", "true", "TRUE", "yes", "YES")
 PRE_SILENCE_MS = int(os.getenv("PRE_SILENCE_MS", "100"))
+PLAY_ONLY = os.getenv("PLAY_ONLY", "0") in ("1", "true", "TRUE", "yes", "YES")
 
 # -----------------------------
 # Funciones
@@ -510,6 +511,18 @@ ser.write(b'ATV1\r')        # habilitar códigos de palabra completa
 time.sleep(0.2)
 
 print(f"📡 Línea configurada en {LOCAL_NUMBER}. Esperando llamadas...")
+
+# Modo prueba: solo reproducir audio y salir
+if PLAY_ONLY:
+    print("🎧 Modo solo reproducción activado (PLAY_ONLY=1). Reproduciendo y saliendo...")
+    try:
+        play_audio(ser, AUDIO_FILE)
+    finally:
+        try:
+            ser.close()
+        except Exception:
+            pass
+    exit(0)
 
 # -----------------------------
 # Variables de estado
